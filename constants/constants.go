@@ -13,3 +13,6 @@ const (
 	FaucetRBT_Level_Offset int = 50000
 	LocalRBT_Level         int = 10000
 )
+
+const MaxTokensPerTransaction = 10000
+const RecommendedMaxTokensPerTransaction = 1000
