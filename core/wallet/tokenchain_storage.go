@@ -11,3 +11,14 @@ type TokenChainEntry struct {
 func (TokenChainEntry) TableName() string {
 	return "tokenchain"
 }
+
+// GetTokenChainHistory returns all tokenchain entries for the given tokenID,
+// ordered by position ascending (genesis first).
+func (w *Wallet) GetTokenChainHistory(tokenID string) ([]TokenChainEntry, error) {
+	var entries []TokenChainEntry
+	err := w.s.Read("tokenchain", &entries, "token_id = ?", tokenID)
+	if err != nil {
+		return nil, err
+	}
+	return entries, nil
+}

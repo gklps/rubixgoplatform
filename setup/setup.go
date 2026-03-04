@@ -128,6 +128,8 @@ const (
 	APINotifyDeExpTokenUpdate string = "/api/token-update"
 
 	APIRemoveStaleDID string = "/api/remove-stale-did"
+
+	APIGetTokenHistory string = "/api/token-history"
 )
 
 // jwt.RegisteredClaims

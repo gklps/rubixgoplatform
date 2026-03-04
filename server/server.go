@@ -214,6 +214,7 @@ func (s *Server) RegisterRoutes() {
 	s.AddRoute(setup.APIGetTokenChainHeight, "GET", s.AuthHandle(s.APIGetFullTokenChainHeight, false, s.AuthError, false))
 
 	s.AddRoute(setup.APIRemoveStaleDID, "POST", s.AuthHandle(s.APIRemoveStaleDID, true, s.AuthError, false))
+	s.AddRoute(setup.APIGetTokenHistory, "GET", s.AuthHandle(s.APIGetTokenHistory, false, s.AuthError, false))
 }
 
 func (s *Server) ExitFunc() error {

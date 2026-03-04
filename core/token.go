@@ -2858,3 +2858,9 @@ func (c *Core) relaseToken(release *bool, token string) {
 		c.w.ReleaseToken(token)
 	}
 }
+
+// GetTokenChainHistory returns all tokenchain entries for a given tokenID,
+// delegating to the wallet layer.
+func (c *Core) GetTokenChainHistory(tokenID string) ([]wallet.TokenChainEntry, error) {
+	return c.w.GetTokenChainHistory(tokenID)
+}
