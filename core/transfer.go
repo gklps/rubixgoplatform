@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rubixchain/rubixgoplatform/block"
+	"github.com/rubixchain/rubixgoplatform/constants"
 	"github.com/rubixchain/rubixgoplatform/contract"
 	"github.com/rubixchain/rubixgoplatform/core/model"
 	"github.com/rubixchain/rubixgoplatform/core/parts"
@@ -111,6 +112,13 @@ func (c *Core) initiateRBTTransfer(reqID string, req *model.RBTTransferRequest) 
 
 	resp := &model.BasicResponse{
 		Status: false,
+	}
+
+	tokenCount := int(req.TokenCount)
+	if tokenCount > constants.MaxTokensPerTransaction {
+		resp.Message = fmt.Sprintf("token count %d exceeds maximum %d per transaction", tokenCount, constants.MaxTokensPerTransaction)
+		txErr = fmt.Errorf("%s", resp.Message)
+		return resp
 	}
 
 	senderDID := req.Sender

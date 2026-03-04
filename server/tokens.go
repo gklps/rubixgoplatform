@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/rubixchain/rubixgoplatform/constants"
 	"github.com/rubixchain/rubixgoplatform/core/model"
 	"github.com/rubixchain/rubixgoplatform/did"
 	"github.com/rubixchain/rubixgoplatform/util"
@@ -101,6 +102,11 @@ func (s *Server) APIInitiateRBTTransfer(req *ensweb.Request) *ensweb.Result {
 	if rbtReq.TokenCount < 0.001 {
 		s.log.Error("Invalid RBT amount. RBT amount should be atlease 0.001")
 		return s.BasicResponse(req, false, "Invalid RBT amount. RBT amount should be atlease 0.001", nil)
+	}
+	if int(rbtReq.TokenCount) > constants.MaxTokensPerTransaction {
+		return s.RenderJSONError(req, http.StatusBadRequest,
+			fmt.Sprintf("token count %d exceeds maximum %d", int(rbtReq.TokenCount), constants.MaxTokensPerTransaction),
+			"too many tokens")
 	}
 	if rbtReq.Type < 1 || rbtReq.Type > 2 {
 		s.log.Error("Invalid trans type. TransType should be 1 or 2")
@@ -388,6 +394,21 @@ func (s *Server) APIValidateToken(req *ensweb.Request) *ensweb.Result {
 		return s.BasicResponse(req, false, "Failed to validate token : "+err.Error(), nil)
 	}
 	return s.RenderJSON(req, br, http.StatusOK)
+}
+
+// APIGetTokenHistory returns the full tokenchain history for a token.
+// GET /api/token-history?tokenID=<id>
+func (s *Server) APIGetTokenHistory(req *ensweb.Request) *ensweb.Result {
+	tokenID := s.GetQuerry(req, "tokenID")
+	if tokenID == "" {
+		return s.RenderJSONError(req, http.StatusBadRequest, "tokenID query parameter required", "missing tokenID")
+	}
+	entries, err := s.c.GetTokenChainHistory(tokenID)
+	if err != nil {
+		s.log.Error("Failed to get token history", "err", err)
+		return s.RenderJSONError(req, http.StatusInternalServerError, "Failed to get token history", err.Error())
+	}
+	return s.RenderJSON(req, entries, http.StatusOK)
 }
 
 // initiates transaction request from wallet server
