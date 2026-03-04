@@ -1,15 +1,14 @@
 package wallet
 
 import (
-	"fmt"
 	"sync"
 
 	ipfsnode "github.com/ipfs/go-ipfs-api"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rubixchain/rubixgoplatform/core/model"
 	"github.com/rubixchain/rubixgoplatform/core/storage"
 	"github.com/rubixchain/rubixgoplatform/wrapper/logger"
 	"github.com/syndtr/goleveldb/leveldb"
-	"github.com/syndtr/goleveldb/leveldb/opt"
 )
 
 const (
@@ -58,6 +57,7 @@ type WalletConfig struct {
 	DBType        string `json:"db_type"`
 	DBUserName    string `json:"db_user_name"`
 	DBPassword    string `json:"db_password"`
+	// Deprecated: TokenChainDir was used for LevelDB storage, now unused with PostgreSQL.
 	TokenChainDir string `json:"token_chain_dir"`
 }
 
@@ -83,6 +83,7 @@ type Wallet struct {
 	asyncProviderMgr               *AsyncProviderDetailsManager
 	fullNodeStorage                *ChainDB
 	IsFullNode                     bool
+	pool                           *pgxpool.Pool
 }
 
 // GetStorage returns the storage interface
@@ -95,6 +96,11 @@ func (w *Wallet) GetIpfsOps() IPFSOperations {
 	return w.ipfsOps
 }
 
+// GetPool returns the pgxpool.Pool for direct PostgreSQL access.
+func (w *Wallet) GetPool() *pgxpool.Pool {
+	return w.pool
+}
+
 func InitWallet(s storage.Storage, fullNodeSQLDB storage.Storage, fullNodePSQLTokensDB storage.Storage, dir string, log logger.Logger, fullNode bool) (*Wallet, error) {
 	var err error
 	w := &Wallet{
@@ -104,27 +110,13 @@ func InitWallet(s storage.Storage, fullNodeSQLDB storage.Storage, fullNodePSQLTo
 		fullNodePSQLTokensDB: fullNodePSQLTokensDB,
 		IsFullNode:           fullNode,
 	}
+	// ChainDB fields are kept for compatibility with token_chain.go but are not
+	// backed by LevelDB. LevelDB storage is deprecated; use PostgreSQL instead.
 	w.tcs = &ChainDB{}
 	w.ntcs = &ChainDB{}
 	w.smartContractTokenChainStorage = &ChainDB{}
 	w.FTChainStorage = &ChainDB{}
 	w.fullNodeStorage = &ChainDB{}
-	op := &opt.Options{
-		WriteBuffer: 64 * 1024 * 1024,
-	}
-
-	tdb, err := leveldb.OpenFile(dir+TokenChainStorage, op)
-	if err != nil {
-		w.log.Error("failed to configure token chain block storage", "err", err)
-		return nil, fmt.Errorf("failed to configure token chain block storage")
-	}
-	w.tcs.DB = tdb
-	ntdb, err := leveldb.OpenFile(dir+NFTChainStorage, op)
-	if err != nil {
-		w.log.Error("failed to configure NFT chain block storage", "err", err)
-		return nil, fmt.Errorf("failed to configure NFT chain block storage")
-	}
-	w.ntcs.DB = ntdb
 
 	err = w.s.Init(DIDStorage, &DID{}, true)
 	if err != nil {
@@ -204,19 +196,49 @@ func InitWallet(s storage.Storage, fullNodeSQLDB storage.Storage, fullNodePSQLTo
 		return nil, err
 	}
 
-	smartcontracTokenchainstorageDB, err := leveldb.OpenFile(dir+SmartContractTokenChainStorage, op)
+	// Initialize normalized SQL tables introduced in P1-T01/T02.
+	err = w.s.Init("transactions", &TransactionRecord{}, true)
 	if err != nil {
-		w.log.Error("failed to configure smart contract token chain block storage", "err", err)
-		return nil, fmt.Errorf("failed to configure smart contract token chain block storage")
+		w.log.Error("Failed to initialize transactions storage", "err", err)
+		return nil, err
 	}
-	w.smartContractTokenChainStorage.DB = smartcontracTokenchainstorageDB
+	err = w.s.Init("tokenchain", &TokenChainEntry{}, true)
+	if err != nil {
+		w.log.Error("Failed to initialize tokenchain storage", "err", err)
+		return nil, err
+	}
+	err = w.s.Init("requests", &RequestRecord{}, true)
+	if err != nil {
+		w.log.Error("Failed to initialize requests storage", "err", err)
+		return nil, err
+	}
 
-	FTtokenStorageDB, err := leveldb.OpenFile(dir+FTChainStorage, op)
-	if err != nil {
-		w.log.Error("failed to configure FT token chain block storage", "err", err)
-		return nil, fmt.Errorf("failed to configure FT token chain block storage")
+	// If the underlying storage is a SQL DB, apply DDL for indexes and FK constraints
+	// that GORM's AutoMigrate does not express via struct tags alone.
+	if sdb, ok := w.s.(*storage.StorageDB); ok {
+		// Composite index for fast "latest entry per token" queries.
+		if err = sdb.ExecSQL(`CREATE INDEX IF NOT EXISTS idx_tokenchain_latest ON tokenchain(token_id, position DESC)`); err != nil {
+			w.log.Error("Failed to create idx_tokenchain_latest index", "err", err)
+			return nil, err
+		}
+		// FK: tokenchain.transaction_id -> transactions.id (using a DO block for idempotency on PostgreSQL).
+		if err = sdb.ExecSQL(`DO $$ BEGIN
+  ALTER TABLE tokenchain ADD CONSTRAINT fk_tc_tx FOREIGN KEY(transaction_id) REFERENCES transactions(id) ON DELETE RESTRICT;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$`); err != nil {
+			w.log.Error("Failed to add fk_tc_tx constraint", "err", err)
+			return nil, err
+		}
+		// FK: tokens.transaction_id -> transactions.id (deferred to allow within-transaction ordering).
+		if err = sdb.ExecSQL(`DO $$ BEGIN
+  ALTER TABLE tokens ADD CONSTRAINT fk_tok_latest_tx FOREIGN KEY(transaction_id) REFERENCES transactions(id) DEFERRABLE INITIALLY DEFERRED;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$`); err != nil {
+			w.log.Error("Failed to add fk_tok_latest_tx constraint", "err", err)
+			return nil, err
+		}
 	}
-	w.FTChainStorage.DB = FTtokenStorageDB
+
 	err = w.s.Init(CallBackUrlStorage, &CallBackUrl{}, true)
 	if err != nil {
 		w.log.Error("Failed to initialize Smart Contract Callback Url storage", "err", err)
@@ -235,15 +257,8 @@ func InitWallet(s storage.Storage, fullNodeSQLDB storage.Storage, fullNodePSQLTo
 	// Initialize async provider details manager with 2 workers
 	w.asyncProviderMgr = NewAsyncProviderDetailsManager(w, 2)
 
-	// DB for fullnodes to store all token-chains
+	// DB for fullnodes to store all token-chains (LevelDB removed; fullNodeStorage is no-op).
 	if w.IsFullNode {
-		fullNodeDB, err := leveldb.OpenFile(dir+FullNodeStorage, op)
-		if err != nil {
-			w.log.Error("failed to configure token chain block storage for full node", "err", err)
-			return nil, fmt.Errorf("failed to configure token chain block storage for full node")
-		}
-		w.fullNodeStorage.DB = fullNodeDB
-
 		err = w.fullNodeSQLDB.Init(FullNodeRBTTable, &SyncedRBT{}, true)
 		if err != nil {
 			w.log.Error("Failed to initialize RBT token storage", "err", err)
