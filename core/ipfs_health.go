@@ -10,6 +10,7 @@ import (
 	ipfsnode "github.com/ipfs/go-ipfs-api"
 	"github.com/rubixchain/rubixgoplatform/core/config"
 	"github.com/rubixchain/rubixgoplatform/wrapper/logger"
+	"golang.org/x/sync/semaphore"
 )
 
 // IPFSHealthManager manages IPFS health and provides global semaphore control
@@ -25,7 +26,7 @@ type IPFSHealthManager struct {
 	healthCheckURL  string
 
 	// Global semaphore for all IPFS operations
-	globalSem     chan struct{}
+	globalSem     *semaphore.Weighted
 	maxConcurrent int
 
 	// Health checker control
@@ -49,7 +50,7 @@ func NewIPFSHealthManager(ipfs *ipfsnode.Shell, cfg *config.Config, log logger.L
 		cfg:                 cfg,
 		isHealthy:           false,
 		healthCheckURL:      fmt.Sprintf("http://127.0.0.1:%d/api/v0/version", cfg.CfgData.Ports.IPFSPort),
-		globalSem:           make(chan struct{}, 10), // Default to 10 concurrent operations
+		globalSem:           semaphore.NewWeighted(10), // Default to 10 concurrent operations
 		maxConcurrent:       10,
 		healthCheckerCtx:    ctx,
 		healthCheckerCancel: cancel,
@@ -71,20 +72,11 @@ func (hm *IPFSHealthManager) SetMaxConcurrency(max int) {
 		return
 	}
 
-	// For now, just update the max value
-	// We cannot safely replace the channel without risking panics
-	// The actual concurrency will be limited by the current channel size
 	oldMax := hm.maxConcurrent
 	hm.maxConcurrent = max
+	hm.globalSem = semaphore.NewWeighted(int64(max))
 
-	// Log the change but note that it won't take effect until restart
-	hm.log.Info("IPFS concurrency limit updated (will take effect on next restart)", "old", oldMax, "new", max)
-	
-	// TODO: Implement a safer way to resize the semaphore channel
-	// Options:
-	// 1. Use a different concurrency control mechanism (e.g., worker pool)
-	// 2. Implement a versioned semaphore system
-	// 3. Require a restart for concurrency changes
+	hm.log.Info("IPFS concurrency limit updated", "old", oldMax, "new", max)
 }
 
 // GetMaxConcurrency returns the current maximum concurrency limit
@@ -130,12 +122,10 @@ func (hm *IPFSHealthManager) AcquireSemaphore(ctx context.Context) error {
 	hm.mu.RUnlock()
 
 	// Then acquire semaphore
-	select {
-	case sem <- struct{}{}:
-		return nil
-	case <-ctx.Done():
+	if err := sem.Acquire(ctx, 1); err != nil {
 		return ctx.Err()
 	}
+	return nil
 }
 
 // ReleaseSemaphore releases the global IPFS semaphore
@@ -145,13 +135,7 @@ func (hm *IPFSHealthManager) ReleaseSemaphore() {
 	sem := hm.globalSem
 	hm.mu.RUnlock()
 
-	select {
-	case <-sem:
-		// Successfully released
-	default:
-		// Semaphore was already empty, this shouldn't happen in normal operation
-		hm.log.Warn("Attempted to release semaphore that was already empty")
-	}
+	sem.Release(1)
 }
 
 // ExecuteWithHealthCheck executes an IPFS operation with health checks and semaphore control
@@ -350,7 +334,5 @@ func (hm *IPFSHealthManager) GetStats() map[string]interface{} {
 		"is_healthy":        hm.isHealthy,
 		"last_health_check": hm.lastHealthCheck,
 		"max_concurrent":    hm.maxConcurrent,
-		"current_load":      len(hm.globalSem),
-		"available_slots":   cap(hm.globalSem) - len(hm.globalSem),
 	}
 }
