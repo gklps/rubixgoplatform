@@ -65,6 +65,8 @@ type Token struct {
 	TransactionID  string    `gorm:"column:transaction_id"`
 	Added          bool      `gorm:"column:added"`
 	SyncStatus     int       `gorm:"column:sync_status"`
+	LatestPosition int64     `gorm:"column:latest_position"`
+	LatestRole     int16     `gorm:"column:latest_role"`
 	CreatedAt      time.Time `gorm:"column:created_at;autoCreateTime"`
 	UpdatedAt      time.Time `gorm:"column:updated_at;autoUpdateTime"`
 }
