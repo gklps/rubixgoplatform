@@ -64,33 +64,47 @@ func Seal(key string, data []byte) ([]byte, error) {
 }
 
 // UnSeal decrypts data. Supports both new (argon2id) and legacy (sha256) formats.
+// New format: [0x01][16-byte salt][nonce][ciphertext]
+// Legacy format: [nonce][ciphertext] (no version prefix, sha256 key derivation)
 func UnSeal(key string, data []byte) ([]byte, error) {
 	if len(data) < 1 {
 		return nil, fmt.Errorf("invalid data: too short")
 	}
 
 	if data[0] == sealVersion1 && len(data) > 1+saltSize {
-		// New format: [0x01][salt][nonce+ciphertext]
-		salt := data[1 : 1+saltSize]
-		encrypted := data[1+saltSize:]
-		k := deriveKeyArgon2id(key, salt)
-		b, err := aes.NewCipher(k)
-		if err != nil {
-			return nil, err
+		// Attempt new format: [0x01][salt][nonce+ciphertext]
+		// If decryption fails, fall back to legacy (handles the 1/256 case where
+		// an old ciphertext happens to start with 0x01).
+		if result, err := unSealV1(key, data); err == nil {
+			return result, nil
 		}
-		gcm, err := cipher.NewGCM(b)
-		if err != nil {
-			return nil, err
-		}
-		nonceSize := gcm.NonceSize()
-		if len(encrypted) < nonceSize {
-			return nil, fmt.Errorf("invalid data: encrypted portion too short")
-		}
-		nonce, ciphertext := encrypted[:nonceSize], encrypted[nonceSize:]
-		return gcm.Open(nil, nonce, ciphertext, nil)
 	}
 
-	// Legacy format: sha256(password) key, no version prefix, just nonce+ciphertext
+	// Legacy format: sha256(password) key, no version prefix
+	return unSealLegacy(key, data)
+}
+
+func unSealV1(key string, data []byte) ([]byte, error) {
+	salt := data[1 : 1+saltSize]
+	encrypted := data[1+saltSize:]
+	k := deriveKeyArgon2id(key, salt)
+	b, err := aes.NewCipher(k)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(b)
+	if err != nil {
+		return nil, err
+	}
+	nonceSize := gcm.NonceSize()
+	if len(encrypted) < nonceSize {
+		return nil, fmt.Errorf("invalid data: encrypted portion too short")
+	}
+	nonce, ciphertext := encrypted[:nonceSize], encrypted[nonceSize:]
+	return gcm.Open(nil, nonce, ciphertext, nil)
+}
+
+func unSealLegacy(key string, data []byte) ([]byte, error) {
 	k := deriveKeySHA256(key)
 	b, err := aes.NewCipher(k)
 	if err != nil {

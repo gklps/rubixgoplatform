@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -83,14 +82,9 @@ func NewPool(dsn string, opts PoolOptions) (*pgxpool.Pool, error) {
 	config.MaxConnLifetime = opts.MaxConnLifetime
 	config.MaxConnIdleTime = opts.MaxConnIdleTime
 
-	// Set statement_timeout on each new connection
-	timeoutMs := opts.StatementTimeout.Milliseconds()
-	config.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
-		return nil // pgxpool handles this differently; set via DSN or BeforeAcquire
-	}
-	// Add statement_timeout to DSN via options
-	if timeoutMs > 0 {
-		config.ConnConfig.RuntimeParams["statement_timeout"] = fmt.Sprintf("%d", timeoutMs)
+	// Set statement_timeout on each connection via PostgreSQL runtime params
+	if opts.StatementTimeout > 0 {
+		config.ConnConfig.RuntimeParams["statement_timeout"] = fmt.Sprintf("%d", opts.StatementTimeout.Milliseconds())
 	}
 
 	pool, err := pgxpool.NewWithConfig(context.Background(), config)

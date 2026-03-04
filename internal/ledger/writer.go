@@ -3,7 +3,6 @@ package ledger
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -165,5 +164,3 @@ func lockTokens(ctx context.Context, tx pgx.Tx, tokenIDs []string) ([]LockedToke
 	return locked, rows.Err()
 }
 
-// startTime is a helper for timing
-var _ = time.Now
