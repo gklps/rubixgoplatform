@@ -78,3 +78,10 @@ func (s *StorageDB) Drop(storageName string, value interface{}) error {
 func (s *StorageDB) UpdateColumn(storageName string, columnName string, columnValue interface{}, conditionString string, conditionValue interface{}) error {
 	return s.ad.UpdateColumn(uuid.Nil, storageName, conditionString, conditionValue, columnName, columnValue)
 }
+
+// ExecSQL executes a raw SQL statement against the underlying GORM database.
+// It is intended for DDL statements (CREATE INDEX, ALTER TABLE, etc.) that are
+// not expressible through the Storage interface's typed methods.
+func (s *StorageDB) ExecSQL(sql string) error {
+	return s.ad.GetDB().Exec(sql).Error
+}

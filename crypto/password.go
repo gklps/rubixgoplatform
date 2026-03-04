@@ -160,7 +160,6 @@ func hashPasswordV3(password string, prf uint, count uint) string {
 	} else {
 		subkey = pbkdf2.Key([]byte(password), salt, int(count), 32, sha512.New)
 	}
-	fmt.Println(salt)
 	result := make([]byte, 13+len(salt)+len(subkey))
 	result[0] = 0x01
 	WriteNetworkOrder(result, 1, prf)
